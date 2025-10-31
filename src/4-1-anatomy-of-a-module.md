@@ -103,13 +103,14 @@ impl<S: Spec> Module for ValueSetter<S> {
     type Config = ValueSetterConfig<S>;
     type CallMessage = CallMessage;
     type Event = Event; // Change this from ()
+    type Error = anyhow::Error;
 
     // The `genesis` method is unchanged.
     fn genesis(&mut self, _header: &<S::Da as sov_modules_api::DaSpec>::BlockHeader, config: &Self::Config, state: &mut impl GenesisState<S>) -> Result<()> {
         // ...
     }
 
-    fn call(&mut self, msg: Self::CallMessage, context: &Context<S>, state: &mut impl TxState<S>) -> Result<()> {
+    fn call(&mut self, msg: Self::CallMessage, context: &Context<S>, state: &mut impl TxState<S>) -> Result<(), Self::Error> {
         match msg {
             CallMessage::SetValue(new_value) => {
                 let admin = self.admin.get(state)??;
@@ -132,6 +133,97 @@ Now, whenever the admin successfully calls `set_value`, the module will emit a `
 A key guarantee of the Sovereign SDK is that event emission is **atomic** with transaction execution—if a transaction reverts, so do its events. This ensures any off-chain system remains consistent with the on-chain state. 
 
 To make it simple to build scalable and faul-tolertant off-chain data pipelines, the sequencer provides a websocket endpoint that streams sequentially numbered transactions along with their corresponding events. If a client disconnects, it can reliably resume the stream from the last transaction it processed.
+
+## Module Error Handling
+
+So far, your module uses `anyhow::Error` for error handling, which is simple but not very robust. For a production-ready module, it's better to define a custom error enum that clearly communicates the different failure modes of your module as well as includes structured error context which makes it easier for client-side applications to handle errors.
+
+Here's how you can define a custom error enum for the `ValueSetter` module:
+
+```rust
+use sov_modules_api::{ErrorDetail, ErrorContext, err_detail};
+
+#[derive(Debug, thiserror::Error, serde::Serialize)]
+#[serde(tag = "error_code", rename_all = "snake_case")]
+pub enum ValueSetterError {
+    // So we can still wrap anyhow::Error for unexpected errors
+    // State getters/setters often use anyhow
+    #[error(transparent)]
+    Any(#[from] anyhow::Error),
+    #[error("User '{sender}' is unauthorized, only the admin can set the value.")]
+    Unauthorized {
+        sender: String,
+    },
+}
+
+impl sov_modules_api::ErrorDetail for ValueSetterError {
+    fn error_detail(&self) -> Result<ErrorContext, Box<dyn std::error::Error + Send + Sync>> {
+        let mut detail = err_detail!(self); // Serializes `ValueSetterError` to a JSON object
+        detail.insert("message".to_owned(), self.to_string().into());
+        Ok(detail)
+    }
+
+}
+```
+
+> **Quick Tip: ErrorDetail trait** 
+>
+> The `ErrorDetail` trait controls how the error is returned from the REST API to clients. We use the `tag` attribute to implement error codes for our module then use `err_detail!` to serialize the error to a JSON object.
+> Finally , we add a human-readable `message` field to the error context to enable showing a summarized message to users.
+
+Then, update your `Module` implementation to use this new error type:
+
+```rust
+impl<S: Spec> Module for ValueSetter<S> {
+    type Spec = S;
+    type Config = ValueSetterConfig<S>;
+    type CallMessage = CallMessage;
+    type Event = Event;
+    type Error = ValueSetterError; // Use the custom error type
+
+    // The `genesis` method is unchanged.
+    fn genesis(&mut self, _header: &<S::Da as sov_modules_api::DaSpec>::BlockHeader, config: &Self::Config, state: &mut impl GenesisState<S>) -> Result<()> {
+        // ...
+    }
+
+    fn call(&mut self, msg: Self::CallMessage, context: &Context<S>, state: &mut impl TxState<S>) -> Result<(), Self::Error> {
+        match msg {
+            CallMessage::SetValue(new_value) => {
+                let admin = self.admin.get(state)??;
+
+                if admin != *context.sender() {
+                    // NEW: Return a structured Unauthorized error
+                    return Err(ValueSetterError::Unauthorized {
+                        sender: context.sender().to_string(),
+                    });
+                }
+
+                self.value.set(&new_value, state)?;
+
+                self.emit_event(state, Event::ValueUpdated(new_value));
+
+                Ok(())
+            }
+        }
+    }
+}
+```
+
+Now when a submitted transaction fails because the sender is not the admin, it will return your `ErrorDetails` in the `details` field of the error response, like this:
+
+```json
+{
+  "error": {
+    "message": "Transaction execution unsuccessful",
+    "status": 400,
+    "details": {
+        "error_code": "unauthorized",
+        "sender": "0x1234...abcd",
+        "message": "User '0x1234...abcd' is unauthorized, only the admin can set the value."
+    }
+  }
+}
+```
 
 ## Next Step: Ensuring Correctness
 
