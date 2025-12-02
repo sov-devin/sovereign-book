@@ -52,10 +52,11 @@ impl<S: Spec> Module for ValueSetter<S> {
     type Config = (); // No configuration yet!
     type CallMessage = CallMessage;
     type Event = ();
+    type Error = anyhow::Error;
 
     // The `call` method handles incoming transactions.
     // Notice it doesn't check *who* is calling.
-    fn call(&mut self, msg: Self::CallMessage, _context: &Context<S>, state: &mut impl TxState<S>) -> Result<()> {
+    fn call(&mut self, msg: Self::CallMessage, _context: &Context<S>, state: &mut impl TxState<S>) -> Result<(), Self::Error> {
         match msg {
             CallMessage::SetValue(new_value) => {
 
@@ -121,6 +122,7 @@ impl<S: Spec> Module for ValueSetter<S> {
     type Config = ValueSetterConfig<S>; // Use the new config struct
     type CallMessage = CallMessage;
     type Event = ();
+    type Error = anyhow::Error;
 
     // `genesis` initializes the module's state. Here, we set the admin address.
     fn genesis(&mut self, _header: &<S::Da as sov_modules_api::DaSpec>::BlockHeader, config: &Self::Config, state: &mut impl GenesisState<S>) -> Result<()> {
@@ -128,7 +130,7 @@ impl<S: Spec> Module for ValueSetter<S> {
         Ok(())
     }
 
-    fn call(&mut self, msg: Self::CallMessage, context: &Context<S>, state: &mut impl TxState<S>) -> Result<()> {
+    fn call(&mut self, msg: Self::CallMessage, context: &Context<S>, state: &mut impl TxState<S>) -> Result<(), Self::Error> {
 // ... existing code ...
 ```
 
