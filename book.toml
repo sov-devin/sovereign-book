@@ -1,7 +1,6 @@
 [book]
 authors = ["Sovereign Labs <info@sovereign.xyz>"]
 language = "en"
-multilingual = false
 src = "src"
 title = "The Sovereign SDK Book"
 
